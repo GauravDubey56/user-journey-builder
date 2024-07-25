@@ -1,0 +1,414 @@
+
+A user journey mapping service, to design and store workflows and emit actions/notifications to users
+
+Requirements-
+
+1. API to register user
+2. API to update user
+3. API to track an event
+4. Journey builder and executor service 
+    a. Add and input journey_blocks
+    b. Initiate journey on trigger
+    c. Execute a journey till and or timeout
+
+
+
+
+SERVICES
+
+USER-EVENT TRACKER SERVICE: 
+1. Maintains a user database to store user information and events
+    
+2. Endpoints
+   
+   POST /user  => Create new users
+        Request
+        {
+            first_name,
+            last_name,
+            email,
+            phone,
+            userId: "U1",
+            attributes: {
+                is_active: true
+            }            
+        }
+        
+        Response {
+            200: {
+                status: "queued"
+            },
+            401: {
+                error: "unauthorized"
+            }
+        }
+
+
+
+    PUT /user  => Update a user on userId
+        {
+            userId: "U1",
+            first_name,
+            ...        
+        }
+        Response {
+            200: {
+                status: "queued"
+            },
+            401: {
+                error: "unauthorized"
+            }
+        }
+
+
+    POST /event => Track an event with userId and eventTime
+        Request
+        EventModel {
+            userId: "U1",
+            eventName: "SOME_NEW_EVENT",
+            eventType: DATETIME
+        }
+        Response {
+            200: {
+                status: "queued"
+            },
+            401: {
+                error: "unauthorized"
+            }
+        }
+
+
+    // Service based endpoints
+    GET /getUserEventOccurrence 
+    
+    Request query {
+        eventName,
+        userId,
+        afterDate,
+        beforeDate
+    }
+    Response {
+        success: true,
+        data : EventModel[]
+    }
+
+
+
+
+
+
+JOURNEY BUILDER AND EXECUTOR SERVICE: 
+
+=> Uses NoSQL data storage to store journey objects, journey_logs
+=> Uses an in-process Job Scheduler to run a journey based on states with possible delays
+=> Consumes API fro event-user service to run actions based on events mapped in journey
+
+1. Data Types/Interfaces
+
+
+    a. occurence_type {
+        once ?: boolean,
+        withtin_x_seconds ?: number,
+        more_than ?: number,
+        less_than ?: number
+    }
+
+
+    b. action_master
+        {
+            label: "trigger",
+            link_types: "multiple",
+            action_types: [ {input_name: "trigger_event", input_type: string} ]
+        },
+        {
+            label: "flow_control",
+            link_types: "multiple",
+            action_types: [ {input_name: "delay", input_type: "number" }, { input_name: "end_journey" } ]
+        },
+        {
+            label: "do_action",
+            link_types: "multiple_specific",
+            action_types: [ { input_name: "send_notification_on_abc" }  ]
+        },
+        {
+            label: "conditional",
+            link_types: "boolean",
+            action_types: [ { input_name: "has_done_event", input_type: occurence_type }, { input_name: "is_reachable_on_abc" }  ]
+        }
+
+    c. Journey Model
+    sampleJourney
+    {
+        entryTrigger:
+            {
+                id: "journey_uid_1",
+                description: " On Cart addition",
+                label: "trigger",
+                action_type: "user_event"
+                input: {
+                    trigger_event: "ON_CART_ADDITION"
+                },
+                link: [
+                    {
+                        stateIds: [2]
+                    }
+                ]
+            }
+        , 
+        journeyStates:[
+            {
+                id: "journey_uid_2",
+                description: "Wait for 15 minutes",
+                label: "flow_control",
+                action_type: "delay",
+                input:  900000 // 15 mintues,
+                link: [
+                    {
+                        stateIds: [3]
+                    }
+                ]
+            },
+            {
+                id: "journey_uid_3",
+                description: "Has done event: PURCHASE",
+                label: "conditional",
+                action_type: "has_done_event",
+                input:  {
+                    once: true
+                },
+                link: [
+                    { stateIds: [7], value: true },
+                    { stateIds: [4], value: false  },
+                ]
+
+            },
+            {
+                id: "journey_uid_4",
+                description: "Has done event: ON_CART_ADDITION",
+                label: "conditional",
+                action_type: "has_done_event",
+                input:  {
+                    within: 900000 
+                },
+                link: [
+                    { stateIds: [5], value: false },
+                    { stateIds: [7], value: true }
+                ]
+            },
+            {
+                id: "journey_uid_5",
+                description: "Is reachable on a channel ABC",
+                label: "conditional",
+                action_type: "is_reachable_on_abc",
+                link: [
+                    { stateIds: [6], value: true },
+                    { stateIds: [7], value: false },
+                ]
+            },
+            {
+                id: "journey_uid_6",
+                description: "Send notification",
+                label: "do_action",
+                action_type: "send_notification_on_abc"
+            },
+            {
+                id: "journey_uid_7",
+                description: "End journey",
+                label: "workflow",
+                action_type: "end_journey"
+            }
+        ]
+    }
+
+2. Data Models
+
+    journey_master_store
+        {journey_id, journey_name, created_at, timeout_in_sec, trigger_type, on_trigger_value, journey_data}
+        [J1, "journeyStates_CART_ADDITION_NO_PURCHASE", 30000, "user_event", "CART_ADDITION", sampleJourney]
+        [J2, "journeyStates_PURCHASE_INITIATED", 30000, "user_event", "PURCHASED", sampleJourney]
+
+
+    journey_user_track
+        {track_id, journey_id, user_id, current_state_id, created_at}  
+        [T1, J1, U1, journey_uid_2, '2023-07-01 23:00:00']
+        [T2, J1, U2, journey_uid_2, '2023-07-01 23:00:00']
+        [T2, J2, U1, journey_uid_2, '2023-07-01 23:00:00']
+
+    findAndUserJourneyTrack (user_id, journey_id, current_state_id) => {
+        current_track = journey_user_track.find( {user_id, journey_id} )
+        if (current_track) {
+            current_track.current_state_id = current_state_id;
+            journey_user_track.update(current_track)
+        } else {
+            // insert 
+        }
+    }
+
+    journey_user_log
+        // tracks start and end times for a user inside a state
+        {track_id, journey_id, user_id, start_time, exit_time}
+        [T1,  J1, U1, 'journey_uid_4']
+
+    findAndUpdateJourneyLog (user_id, journey_id, current_state_id, start_time, exit_time) => {
+        action_log = journey_user_log.find( {user_id, journey_id, current_state_id} )
+        if (action_log) {
+            action_log.exit_time = exit_time;
+            
+        } else {
+            // insert with start time
+        }
+    }
+
+    notification_contents
+        {notification_content_id, journey_id, journey_state_id, template, channel_type}
+
+3. API endpoints
+    a. Journey data payload
+        -> journey_blocks
+        Data payload that draws out mapped journey
+     POST /saveJourney
+        Request
+            {
+                entryTrigger,
+                journeyStates
+            }
+        Reponse 
+            {
+                201: {
+                    status: "created"
+                }
+            }
+
+    b. Track event with journey
+    
+    POST /trackEvent
+        Request {
+            eventName: "CART_ADDITION",
+            userId: 'U1'
+        }
+        Resposne {
+            200: {
+                status: "queued"
+            }
+        }
+        
+
+    
+
+
+
+JOURNEY EXECUTOR SERVICE
+
+// ExecutorService.js
+
+
+const Queue = require('bull');
+const db = require('./mockDb');
+const notificationService = require('./notificationService');
+
+const delayQueue = new Queue('delayQueue');
+
+const timeoutQueue = new Queue('delayQueue');
+
+delayQueue.process(async (job) => {
+    const { trackId } = job.data;
+    await journeyExecutor.executeJourney(trackId);
+});
+
+
+timeoutQueue.process(async (job) => {
+    const { trackId } = job.data;
+    await timeoutAndEndJourney(trackId);
+});
+
+
+timeoutAndEndJourney = (trackId) => {
+
+}
+
+
+executeJourney = async (trackId) => {
+    let journeyTrack = db.getJourneyTrack(trackId);
+    let journeyStore = db.getJourneyObject(journeyTrack.journeyId);
+
+
+    if (journeyTrack.current_state_id == journeyTrack.triggerEvent.stateId && journeyTrack.timeout) {
+        await timeoutQueue.add({ trackId }, { delay: journeyTrack.timeout });
+    }
+
+    while (journeyTrack) {
+        const currentState = db.getJourneyState(journeyTrack.current_state_id);
+
+        switch (currentState.label) {
+            case 'flow_control':
+                if (currentState.action_type === 'delay') {
+                    await delayQueue.add({ trackId }, { delay: currentState.input });
+                    return; 
+                }
+                break;
+
+            case 'conditional':
+                const conditionMet = checkCondition(currentState, journeyTrack.user_id);
+                journeyTrack.current_state_id = getNextState(currentState, conditionMet);
+                break;
+
+            case 'do_action':
+                handleAction(currentState, journeyTrack.user_id);
+                break;
+
+            case 'workflow':
+                if (currentState.action_type === 'end_journey') {
+                    return endJourney(journeyTrack);
+                }
+                break;
+
+            default:
+                throw new Error(`Unknown state label: ${currentState.label}`);
+        }
+
+        db.updateJourneyTrack(journeyTrack);
+    }
+};
+
+checkCondition = async (state, userId) => {
+    const { input } = state;
+    const events = await getDataFromUserEventService(userId, input.name);
+
+    if (input.once) {
+        return events.length > 0;
+    }
+
+    if (input.within_x_seconds) {
+        return events.some(event => (new Date() - new Date(event.eventTime)) <= input.within_x_seconds * 1000);
+    }
+
+    if (input.more_than) {
+        return events.length > input.more_than;
+    }
+
+    if (input.less_than) {
+        return events.length < input.less_than;
+    }
+
+    return false;
+};
+
+const getNextState = (state, conditionMet, lastState) => {
+    const link = state.link.find(l => l.value === conditionMet && l.sta);
+    return link ? link.stateIds[0] : null;
+};
+
+const handleAction = (state, userId) => {
+    switch (state.action_type) {
+        case 'send_notification_on_abc':
+            notificationService.sendNotification(userId, 'ABC');
+            break;
+        default:
+            throw new Error(`Unknown action type: ${state.action_type}`);
+    }
+};
+
+const endJourney = (journeyTrack) => {
+    db.logJourneyEnd(journeyTrack);
+    journeyTrack = null;
+};
