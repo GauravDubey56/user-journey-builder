@@ -1,0 +1,188 @@
+
+*************
+User Service
+*************
+
+
+Save and fetch user information, critical to execute journeys
+
+USER database
+
+user_profile
+----------
+user_id
+first_name
+last_name
+email
+phome
+main_device_id
+dob
+geolocation
+is_active
+attributes {
+    key1: "val1"
+}
+
+notification_preferences
+--------------
+user_id
+email_preferences {
+    reachable: true,
+    subscribed: true,
+    marketing: true,
+    transactional: true
+}
+sms_preferences {
+    reachable: true,
+    subscribed: true,
+    ...
+}
+push_notification {
+    ...
+}
+
+AUTHENTICATION
+1. For user info updates from web applicaion => tokenized clientInfo 
+2. For queries from other services (event, event_trigger, journey_execution) => tokenized serviceId 
+
+REST Endpoints
+- GET /users/{userId}: Retrieve user profile
+- POST /users: Create new user
+- PUT /users/{userId}: Update user profile
+- GET /users/{userId}/preferences: Get notification preferences
+- PUT /users/{userId}/preferences: Update notification preferences
+
+PERFORMANCE
+1. Event bus on updates on user information 
+    => To handle user creation and updates with high throughput
+    => Notify other services on updating user_attributes, if journeys attached to such trigger
+
+2. Caching on queries from other services
+    
+
+
+
+
+****************************
+Event Capturing Service
+****************************
+
+EVENT database
+
+user_events
+----------
+user_event_id
+user_id
+event_name
+event_at
+attributes {}
+
+trigger_events
+----------
+trigger_id
+journey_id
+event_name
+conditions {
+    only_once,
+    count
+}
+trigger: true/false
+// [ actions can be mapped with journeys in middle of the flow too]
+
+
+REST API
+
+AUTHENTICATION
+    For user info updates from API consumers => tokenized clientInfo 
+
+Endpoints
+    POST /event => Event Ingestion
+    GET /userEvent?userId&eventId => Read user events to check conditions and continue workflow of journey             
+
+Event Ingestion
+-Validate event payload: userId and eventTime
+-Post validation, publish events to message queues
+
+Event message queues
+-Provide availability in spikes in creating events
+-Delivery to one or multiple event processors 
+
+Event processing
+-Consumes message payload from queues
+-Checks eventName in trigger_events storage  
+-Checks condtions and fetches events on userId to check if trigger is valid
+-Notifies journey service to either inititate or continue a journey
+
+PERFORMANCE
+-Horizontal scaling of event processor to consume based on increase load to message queues
+-Retry mechanism in case of failure in processing of messages
+-Caching on event_trigger or event_journey mapping for faster Event jouney matching processing
+
+
+
+
+*************************
+JOURNEY EXECUTION SERVICE
+*************************
+
+
+Store journey definition and manage execution states
+
+JourneyExecution database
+
+journey_definition 
+----------
+
+-journey_states of blocks of trigger action, condition, flow_control
+-containing link ids to next states
+
+(Journey model) to be stored (nested JSON) inside a NoSQL Databse
+
+
+journey_state
+----------
+
+-stores current state of journey
+
+
+job_store
+--------
+
+-stores information relavant to delayed jobs and actions
+
+
+PROCESSING
+
+
+POST /initiateJourney => check if journeyId matched by event trigger service is defined
+                      => init journey
+                      => load journey store and place states linked to trigger in message queues
+
+
+
+
+Journey Workers
+
+    -> Conditional service: 
+    Call/Query relevant user service or event service to check if the given conditions has happened
+
+    -> Action service: 
+    Pass the payload to relevant service (such as sending a notification or simply calling an APi)
+
+    -> Timer-Based service:
+    Calculate the next exection time of the JOB and maintain a delay job queue/priority queue
+
+**Each service on completion will check the type of state in linked states and call the relavant service
+
+
+PERFORMANCE
+- Horizontal scaling of journey workers
+- Maintain dead letter queus for unprocessed states
+- Read replicas of journey_states_store 
+- Partition a queue on user_id to execute journeys based on user parallely
+
+
+
+
+
+
