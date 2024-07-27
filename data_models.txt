@@ -150,7 +150,7 @@ JOURNEY BUILDER AND EXECUTOR SERVICE:
                 },
                 link: [
                     {
-                        stateIds: [2]
+                        stateIds: [journey_uid_2]
                     }
                 ]
             }

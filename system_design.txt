@@ -154,10 +154,25 @@ job_store
 PROCESSING
 
 
+POST /validateJourney => Perform validations on a JSON object depciting journey
+                      => Check if Client has configured all steps needed to carry out journey, 
+                                -API callbacks, notification service setups etc.
+                      => Check if any user entering the journey can exit the journey or not
+                                -Looping should not be there
+
+POST /saveJourney => Save journey JSON object into a NoSQL store
+
 POST /initiateJourney => check if journeyId matched by event trigger service is defined
                       => init journey
                       => load journey store and place states linked to trigger in message queues
 
+POST /conditionalServiceCallback
+POST /actionServiceCallback
+POST /jobServiceCallback
+
+
+**At each state update call check if the exit condition has been met and exist journey
+  and notify user analytics service (if needed) 
 
 
 
@@ -167,12 +182,15 @@ Journey Workers
     Call/Query relevant user service or event service to check if the given conditions has happened
 
     -> Action service: 
-    Pass the payload to relevant service (such as sending a notification or simply calling an APi)
+    Pass the payload to relevant service (such as sending a notification or simply calling an API)
 
     -> Timer-Based service:
-    Calculate the next exection time of the JOB and maintain a delay job queue/priority queue
+    DELAYED JOB SERVICE  
 
-**Each service on completion will check the type of state in linked states and call the relavant service
+    
+
+**Each service on completion will check the type of state in linked states
+  and query the relevant service (User, ApplicationClient)
 
 
 PERFORMANCE
@@ -184,5 +202,34 @@ PERFORMANCE
 
 
 
+******************
+FLOW CONTROL SERVICE
+******************
 
+-Collect time based tasks and callback from Journey execution services and process.
+-Persisit it in a database (HBase) with 
+    job_id, 
+    execution_timestamp, 
+    job_data (HTTP calls), 
+    journey_state_data, 
+    callback_data (HTTP calls data), 
+    job_configuration
 
+-Idea is to have a service that accepts job, a service that runs to extract jobs, push it into a message queue, 
+    and have consumers run the jobs without duplicay
+
+Components
+
+Job Extraction
+-Scan DB to fetch jobs with execution_timestamp <= current_timtstamp
+-Push jobs to message queue (job_exuection_data, callback)
+-Scan jobs with an interval in place (1-5 seconds)
+
+Job Queue consumer
+-Execute jobs and pass on data to callback queue with response
+-Retry failures with a job_configuration (retry_count, retry_expiry, failure_callback)
+
+Callback Queue consumer
+-Execute callback to services which initiated job
+-For ex- checking if an event has been done 
+        -> the data needs to be assessed by the journey_service using the journey_state_data as part of the payload
